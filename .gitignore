@@ -1,0 +1,75 @@
+*mrcpengine.xml
+*~
+*.o
+*.so
+*.lo
+*.a
+*.la
+*.loT
+*.orig
+*.rej
+*.dirstamp
+.env
+
+# /
+/debug
+/release
+/Debug
+/Release
+/x64
+/*.ncb
+/*.suo
+/*.sdf
+/*.opensdf
+/ipch
+/configure
+/config.log
+/config.nice
+/config.status
+/autom4te.cache
+/aclocal.m4
+/libtool
+/Makefile.in
+/Makefile
+/CHANGES-deps
+/README-deps
+/unimrcpdeps.sln
+/unimrcpdeps-2010.sln
+
+# /.build/
+/.build*
+
+# /build/
+/build/ltmain.sh
+/build/depcomp
+/build/missing
+/build/compile
+/build/config.guess
+/build/config.sub
+/build/install-sh
+/build/Makefile.in
+/build/Makefile
+
+# /build/acmacros
+/build/acmacros/libtool.m4
+/build/acmacros/ltoptions.m4
+/build/acmacros/ltsugar.m4
+/build/acmacros/ltversion.m4
+/build/acmacros/lt~obsolete.m4
+
+# /build/pkgconfig/
+/build/pkgconfig/Makefile.in
+/build/pkgconfig/Makefile
+/build/pkgconfig/unimrcpclient.pc
+/build/pkgconfig/unimrcpserver.pc
+/build/pkgconfig/unimrcpplugin.pc
+
+# /build/props/
+
+# /build/tools/
+/build/tools/Debug
+/build/tools/Release
+/build/tools/x64
+/build/tools/*.user
+
+

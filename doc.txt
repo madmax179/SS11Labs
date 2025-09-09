@@ -1,0 +1,153 @@
+## ElevenLabs TTS plugin for UniMRCP — quick guide
+
+This document explains how to deploy, configure, and operate the ElevenLabs speechsynth plugin on UniMRCP Server 1.8 (Ubuntu 20.04), including zero‑transcoding setup and on‑disk caching.
+
+
+## 1) What this plugin does
+- Provides MRCPv2 speechsynth using ElevenLabs Text‑to‑Speech API.
+- Streams audio asynchronously with low TTFB (IN‑PROGRESS sent immediately; periodic keep‑alive).
+- Produces PCM 8 kHz by default; can request μ‑law/A‑law/MP3 as needed.
+- Optional on‑disk caching to avoid repeated ElevenLabs calls for identical requests.
+
+
+## 2) Files and install locations
+- Plugin library: elevenlabs-synth.so (built artifact)
+- Default UniMRCP install tree example: /opt/unimrcp (or your chosen prefix)
+  - Place the plugin into: <install>/plugin/
+  - Configure via: <install>/conf/mrcpengine.xml
+  - Server runtime config: <install>/conf/unimrcpserver.xml
+
+Note: use your actual UniMRCP prefix if different.
+
+
+## 3) UniMRCP 1.8 on Ubuntu 20.04 (high‑level)
+- Install UniMRCP Server from repository or build from source.
+- Ensure the ElevenLabs plugin .so is copied to the server plugin directory.
+- Start the server normally after configuration (see sections below).
+
+
+## 4) MRCP server codec config (avoid transcoding)
+To avoid intermediate transcoding, align ElevenLabs output with negotiated RTP:
+- Prefer L16/8000 (linear PCM) on RTP, and set ElevenLabs output to pcm_8000.
+- In server codecs line (unimrcpserver.xml or relevant profile), enable server preference and list L16 first, e.g.:
+  - <codecs own-preference="true">L16/96/8000 PCMA PCMU telephone-event/101/8000</codecs>
+Effect:
+- Offer/Answer selects L16/8000.
+- Media path packetizes PCM directly into RTP L16 (no lossy encode step).
+
+
+## 5) Plugin configuration (mrcpengine.xml)
+Add/update the <plugin id="elevenlabs-synth" ...> entry and parameters:
+- base_url: ElevenLabs TTS base endpoint. Default: https://api.elevenlabs.io/v1/text-to-speech
+- api_key: Your ElevenLabs API key. (required)
+- voice_id: Default voice (used if MRCP Voice-Name header is absent). (required)
+- model_id: ElevenLabs model id. Default: eleven_multilingual_v2
+- output_format: Typical values: pcm_8000, ulaw_8000, alaw_8000, mp3
+- optimize_streaming_latency: 0..4 (higher may reduce TTFB)
+- chunk_ms: Frame size to MPF (e.g., 20)
+- connect_timeout_ms: Default 5000
+- read_timeout_ms: Default 15000
+- fallback_ulaw_to_pcm: true|false (when output_format=ulaw_8000/alaw_8000, convert to PCM for MPF)
+- cache_enabled: true|false (enable local audio caching) — default false
+- cache_dir: path to local cache directory — default ./data/11labs
+
+Example snippet:
+- <plugin id="elevenlabs-synth" name="elevenlabs-synth" enable="true">
+  - <param name="base_url" value="https://api.elevenlabs.io/v1/text-to-speech"/>
+  - <param name="api_key" value="sk_..."/>
+  - <param name="voice_id" value="NFG5..."/>
+  - <param name="model_id" value="eleven_multilingual_v2"/>
+  - <param name="output_format" value="pcm_8000"/>
+  - <param name="optimize_streaming_latency" value="0"/>
+  - <param name="chunk_ms" value="20"/>
+  - <param name="connect_timeout_ms" value="5000"/>
+  - <param name="read_timeout_ms" value="15000"/>
+  - <param name="fallback_ulaw_to_pcm" value="true"/>
+  - <param name="cache_enabled" value="true"/>
+  - <param name="cache_dir" value="./data/11labs"/>
+- </plugin>
+
+Notes:
+- The MRCP request header Voice-Name overrides the configured voice_id.
+- base_url, output_format, latency optimizations are fully configurable.
+
+
+## 6) Runtime behavior (what happens on SPEAK)
+- The plugin extracts plain text from MRCP body (SSML tags removed for text) and determines the effective voice_id:
+  - If MRCP Voice-Name header is present → use it; otherwise, use configured voice_id.
+- Asynchronous streaming:
+  - Sends 200 IN-PROGRESS immediately.
+  - If no audio yet, returns silence frames and periodically sends IN-PROGRESS (~500 ms) until audio arrives.
+  - STOP is handled promptly: HTTP stream stops, state resets, and an async response is sent.
+
+Audio to RTP mapping:
+- With output_format=pcm_8000 and RTP L16/8000 selected, audio is passed as PCM directly (no transcoding).
+- With ulaw_8000/alaw_8000 and fallback_ulaw_to_pcm=true, μ-law/A-law is converted to PCM for MPF; stored cache will be PCM WAV.
+
+
+## 7) Caching (on‑disk)
+Goal: avoid ElevenLabs cost/latency for repeated identical requests.
+- Key derivation: SHA1(voice_id + model_id + output_format + text)
+- File path: <cache_dir>/<key>.(wav|mp3|bin)
+  - pcm_* → .wav (S16LE, sample rate inferred from the format name, e.g., 8000)
+  - mp3* → .mp3 (raw MP3 stream)
+  - ulaw_/alaw_ → .wav (G.711 WAV; if fallback_ulaw_to_pcm=true, stored as PCM WAV)
+
+Flow:
+- On each SPEAK:
+  - If file exists and non‑empty → cache hit: plugin reads it and streams immediately; ElevenLabs HTTP is skipped.
+  - If not → cache miss: plugin streams live from ElevenLabs, while concurrently writing a .part file; on success, writes WAV header (if needed) and atomically renames .part to final.
+- Failure safety:
+  - If HTTP fails, times out, or is aborted, the .part is deleted (no corrupt cache entries).
+- Manual cache maintenance:
+  - You can safely delete files under ./data/11labs. The plugin will keep checking for cache; missing files simply cause cache‑miss and re‑generation on the next identical request.
+  - To refresh a specific phrase/voice: delete that file; next SPEAK re‑generates and re‑caches it.
+
+Concurrency note:
+- If the same key is requested concurrently, the first miss will generate, others may miss too; simple locks can be added later if needed.
+
+
+## 8) Latency tuning
+- TTFB depends on ElevenLabs and network; you can tweak:
+  - optimize_streaming_latency: try 3–4 for faster first audio chunk.
+  - chunk_ms: keep at 20 ms for telephony; aligns with common ptime.
+
+
+## 9) Troubleshooting
+- HTTP 401 after switching Voice-Name: that voice may be unavailable for your API key. Either configure an allowed voice_id or stop sending Voice-Name.
+- Media Path shows Encoder->[PCMA/...]: server answered G.711. Prefer L16 in server codecs as shown to avoid transcoding.
+- No audio or early STOP: check server logs for IN-PROGRESS cadence and HTTP status; plugin logs TTFB and HTTP code.
+- Cache not written: expected on failures; partial files are discarded by design.
+
+
+## 10) Quick start (outline)
+- Copy elevenlabs-synth.so to <unimrcp>/plugin/
+- Edit <unimrcp>/conf/mrcpengine.xml and add the plugin params (API key etc.).
+- Ensure server codecs prefer L16/8000 (own-preference="true").
+- Start UniMRCP Server and place a SPEAK request. Confirm logs:
+  - Local SDP includes L16/8000.
+  - Plugin logs “Starting synthesis…” then “HTTP/2 200” and “TTFB … ms”.
+  - On repeats, expect “Cache hit: …” and immediate playback.
+
+
+## 11) Known limitations
+- The runtime stream path feeds PCM frames into MPF; true encoded G.711 passthrough mode is not implemented. For zero transcoding, prefer L16/8000 on RTP and pcm_8000 from ElevenLabs.
+- No automatic cache eviction policy (TTL/LRU) yet.
+
+
+## 12) Support matrix (formats)
+- ElevenLabs output:
+  - PCM (S16LE): 8k–48k (use pcm_8000 for telephony)
+  - μ-law (ulaw_8000), A‑law (alaw_8000)
+  - MP3 (22.05–44.1 kHz)
+- MRCP/RTP:
+  - Prefer L16/8000 for direct PCM packetization and best quality in telephony paths.
+
+
+## 13) Logs to look for
+- Offer/Answer codecs and Media Path (server)
+- Plugin:
+  - “Starting synthesis with URL: …”
+  - “ElevenLabs API response: HTTP/2 …”
+  - “TTFB (first audio chunk): … ms”
+  - “Cache hit: …” / “Cached audio saved: …” / “Discarded partial cache: …”

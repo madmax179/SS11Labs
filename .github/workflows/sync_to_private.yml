@@ -25,13 +25,12 @@ jobs:
           else
             echo "PRIVATE_REPO_PAT is set."
           fi
-      - name: Test connection to private repo
-        run: |
-          git ls-remote https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/AlexeyIzosimov/SS11Labs_private.git HEAD
-    
+          
       # 2️⃣ Добавляем приватный репо как remote
       - name: Add private repo remote
         env:
           PRIVATE_REPO_PAT: ${{secrets.PRIVATE_REPO_PAT}}
-        run: git push https://x-access-token:$PRIVATE_REPO_PAT@github.com/AlexeyIzosimov/SS11Labs_private.git main --force
-        
+        run: |
+          git remote remove private 2>/dev/null || true
+          git remote add private https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/<owner>/<repo>.git
+          git remote -v

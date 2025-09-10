@@ -331,7 +331,7 @@ elevenlabs_http_client_start_synthesis(elevenlabs_http_client_t *client,
 
       /* If file exists, switch to cache playback mode by loading into buffer and skipping HTTP entirely */
       apr_finfo_t finfo; memset(&finfo, 0, sizeof(finfo));
-      if (apr_stat(&finfo, client->cache_path_final, APR_FINFO_SIZE, client->pool) == APR_SUCCESS && finfo.size > 0) {
+    if (apr_stat(&finfo, client->cache_path_final, APR_FINFO_SIZE, client->pool) == APR_SUCCESS && finfo.size > 0) {
         apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO, "Cache hit: %s", client->cache_path_final);
         /* Read file and push to buffer in chunks to avoid huge allocations */
         apr_file_t *fp = NULL;
@@ -351,7 +351,9 @@ elevenlabs_http_client_start_synthesis(elevenlabs_http_client_t *client,
           apr_file_close(fp);
           /* Mark stopped to indicate EOF, and skip HTTP */
           client->stopped = TRUE;
-          return TRUE;
+      /* Release mutex before returning from cache-playback path */
+      apr_thread_mutex_unlock(client->mutex);
+      return TRUE;
         }
       } else {
         /* Ensure cache directory exists */

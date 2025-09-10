@@ -31,5 +31,5 @@ jobs:
         env:
           PRIVATE_REPO_PAT: ${{secrets.PRIVATE_REPO_PAT}}
         run: |
-          git remote add private https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/<owner>/<repo>.git
+          git remote add private https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/AlexeyIzosimov/SS11Labs_private.git
           git remote -v

@@ -37,7 +37,7 @@ jobs:
           fi
       
           # Добавляем приватный репо
-          git remote add private https://x-access-token:$PRIVATE_REPO_PAT@github.com/AlexeyIzosimov/SS11Labs_private.git
+          git remote add private https://x-access-token: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@github.com/AlexeyIzosimov/SS11Labs_private.git
         
       # 3️⃣ Пушим изменения в приватный репо
       - name: Push to private repo

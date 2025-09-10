@@ -1,0 +1,26 @@
+name: Sync to Private Repo
+
+on:
+  push:
+    branches:
+      - main  # срабатывает на пуш в ветку main публичного репо
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # 1️⃣ Клонируем публичный репозиторий
+      - name: Checkout source repo
+        uses: actions/checkout@v3
+        with:
+          repository: madmax179/SS11Labs
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2️⃣ Добавляем приватный репо как remote
+      - name: Add private repo remote
+        run: git remote add private https://github.com/AlexeyIzosimov/SS11Labs_private.git
+
+      # 3️⃣ Пушим изменения в приватный репо
+      - name: Push to private repo
+        run: git push private main --force

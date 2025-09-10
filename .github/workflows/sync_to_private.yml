@@ -30,15 +30,5 @@ jobs:
       - name: Add private repo remote
         env:
           PRIVATE_REPO_PAT: ${{secrets.PRIVATE_REPO_PAT}}
-        run: |
-          # Удаляем remote private, если он есть
-          if git remote | grep -q '^private$'; then
-            git remote remove private
-          fi
-      
-          # Добавляем приватный репо
-          git remote add private https://x-access-token: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@github.com/AlexeyIzosimov/SS11Labs_private.git
+        run: git push https://x-access-token:$PRIVATE_REPO_PAT@github.com/AlexeyIzosimov/SS11Labs_private.git main --force
         
-      # 3️⃣ Пушим изменения в приватный репо
-      - name: Push to private repo
-        run: git push private main --force

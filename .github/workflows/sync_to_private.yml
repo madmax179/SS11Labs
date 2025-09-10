@@ -31,6 +31,5 @@ jobs:
         env:
           PRIVATE_REPO_PAT: ${{secrets.PRIVATE_REPO_PAT}}
         run: |
-          git remote remove private 2>/dev/null || true
           git remote add private https://x-access-token:${{ secrets.PRIVATE_REPO_PAT }}@github.com/<owner>/<repo>.git
           git remote -v

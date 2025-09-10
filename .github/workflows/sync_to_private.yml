@@ -16,7 +16,16 @@ jobs:
           repository: madmax179/SS11Labs
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
-
+      
+      - name: Check PRIVATE_REPO_PAT secret
+        run: |
+          if [ -z "${{ secrets.PRIVATE_REPO_PAT }}" ]; then
+            echo "PRIVATE_REPO_PAT is not set!"
+            exit 1
+          else
+            echo "PRIVATE_REPO_PAT is set."
+          fi
+      
       # 2️⃣ Добавляем приватный репо как remote
       - name: Add private repo remote
         env:

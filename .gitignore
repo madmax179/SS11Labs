@@ -1,0 +1,10 @@
+*mrcpengine.xml
+*~
+*.o
+.env
+
+
+# /
+/.github
+/standalone/*.so
+/binary

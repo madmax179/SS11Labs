@@ -159,19 +159,24 @@ libsqlite3.so.0 => /lib/x86_64-linux-gnu/libsqlite3.so.0 (0x00007ff8da255000)
 
 ### 1) Plugin (`/opt/unimrcp/conf/mrcpengine.xml`)
 ```xml
-<plugin id="elevenlabs-synth" name="elevenlabs-synth" enable="true">
-   <param name="api_key" value="YOUR_XI_API_KEY"/>
-   <param name="voice_id" value="NFG5..."/>
-   <param name="model_id" value="eleven_multilingual_v2"/>
-   <param name="output_format" value="pcm_8000"/>
-   <param name="fallback_ulaw_to_pcm" value="true"/>
-   <param name="cache_enabled" value="true"/>
-   <param name="cache_dir" value="./data/11labs"/>
-   <param name="optimize_streaming_latency" value="0"/>
-   <param name="chunk_ms" value="20"/>
-   <param name="connect_timeout_ms" value="5000"/>
-   <param name="read_timeout_ms" value="15000"/>
-</plugin>
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+<plugins>
+  <plugin id="elevenlabs-synth" name="elevenlabs-synth" enable="true">
+     <param name="api_key" value="YOUR_XI_API_KEY"/>
+     <param name="voice_id" value="NFG5..."/>
+     <param name="model_id" value="eleven_multilingual_v2"/>
+     <param name="output_format" value="pcm_8000"/>
+     <param name="fallback_ulaw_to_pcm" value="true"/>
+     <param name="cache_enabled" value="true"/>
+     <param name="cache_dir" value="./data/11labs"/>
+     <param name="optimize_streaming_latency" value="0"/>
+     <param name="chunk_ms" value="20"/>
+     <param name="connect_timeout_ms" value="5000"/>
+     <param name="read_timeout_ms" value="15000"/>
+  </plugin>
+</plugins>
+</root>
 ```
 
 Important: MRCP SPEAK header `Voice-Name` overrides `voice_id`.

@@ -201,17 +201,26 @@ apt_bool_t elevenlabs_synth_channel_destroy(mrcp_engine_channel_t *channel)
 {
     elevenlabs_synth_channel_t *synth_channel = channel->method_obj;
     
+    apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_DEBUG,
+           "Destroying synth channel [%p]", (void*)synth_channel);
+    
     if (synth_channel) {
         if (synth_channel->http_client) {
             elevenlabs_http_client_stop(synth_channel->http_client);
+            /* CRITICAL: Destroy HTTP client to cleanup background thread */
+            elevenlabs_http_client_destroy(synth_channel->http_client);
+            synth_channel->http_client = NULL;
         }
         
         if (synth_channel->audio_buffer) {
             audio_buffer_clear(synth_channel->audio_buffer);
+            audio_buffer_destroy(synth_channel->audio_buffer);
+            synth_channel->audio_buffer = NULL;
         }
         
         if (synth_channel->mutex) {
             apr_thread_mutex_destroy(synth_channel->mutex);
+            synth_channel->mutex = NULL;
         }
     }
     
@@ -292,7 +301,8 @@ static apt_bool_t elevenlabs_channel_speak(mrcp_engine_channel_t *channel,
     }
     
     apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO, 
-           "Processing SPEAK request with text: %s", text);
+           "Processing SPEAK request [channel=%p, http_client=%p] with text: %s",
+           (void*)synth_channel, (void*)synth_channel->http_client, text);
     
     /* Clear audio buffer and reset state */
     audio_buffer_clear(synth_channel->audio_buffer);
@@ -330,16 +340,36 @@ static apt_bool_t elevenlabs_channel_stop(mrcp_engine_channel_t *channel,
     elevenlabs_synth_channel_t *synth_channel = channel->method_obj;
     
     apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO, 
-           "Processing STOP request");
+           "Processing STOP request [channel=%p, http_client=%p]",
+           (void*)synth_channel, (void*)synth_channel->http_client);
+    
+    /* Clear audio buffer immediately */
+    if (synth_channel->audio_buffer) {
+        audio_buffer_clear(synth_channel->audio_buffer);
+    }
     
     /* Stop ongoing synthesis */
     if (synth_channel->synthesizing && synth_channel->http_client) {
         elevenlabs_http_client_stop(synth_channel->http_client);
         synth_channel->synthesizing = FALSE;
+        
+        apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO, 
+               "Synthesis stopped, HTTP client terminated");
     }
     
-    /* Store stop response for later */
-    synth_channel->stop_response = response;
+    /* Send STOP response immediately, don't wait for stream_read */
+    response->start_line.request_state = MRCP_REQUEST_STATE_COMPLETE;
+    mrcp_engine_channel_message_send(channel, response);
+    
+    /* If there was an active SPEAK request, send SPEAK-COMPLETE with error cause */
+    if (synth_channel->speak_request) {
+        elevenlabs_send_speak_complete(channel, synth_channel->speak_request,
+                                      SYNTHESIZER_COMPLETION_CAUSE_ERROR);
+        synth_channel->speak_request = NULL;
+    }
+    
+    /* Don't store stop_response - we already sent it */
+    synth_channel->stop_response = NULL;
     
     return TRUE;
 }
@@ -404,20 +434,6 @@ apt_bool_t elevenlabs_synth_stream_close(mpf_audio_stream_t *stream)
 apt_bool_t elevenlabs_synth_stream_read(mpf_audio_stream_t *stream, mpf_frame_t *frame)
 {
     elevenlabs_synth_channel_t *synth_channel = stream->obj;
-    
-    /* Check if STOP was requested */
-    if (synth_channel->stop_response) {
-        apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO, 
-               "Synthesis stopped by STOP request.");
-        
-        /* Send async response to STOP request */
-        mrcp_engine_channel_message_send(synth_channel->channel, synth_channel->stop_response);
-        synth_channel->stop_response = NULL;
-        synth_channel->speak_request = NULL;
-        synth_channel->synthesizing = FALSE;
-        
-        return TRUE;
-    }
     
     /* Check if there is active SPEAK request and synthesis is in progress */
     if (synth_channel->speak_request && synth_channel->synthesizing) {

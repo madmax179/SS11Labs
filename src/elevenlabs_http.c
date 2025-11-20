@@ -23,7 +23,10 @@ static size_t write_callback(void *contents, size_t size, size_t nmemb,
   elevenlabs_http_client_t *client = (elevenlabs_http_client_t *)userp;
   size_t total_size = size * nmemb;
 
+  /* Check stopped flag early to abort transfer quickly */
   if (client->stopped) {
+    apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_DEBUG,
+            "Write callback aborted - client stopped");
     return 0; /* Stop receiving data */
   }
 
@@ -107,8 +110,7 @@ elevenlabs_http_client_t *elevenlabs_http_client_create(apr_pool_t *pool) {
     return NULL;
   }
 
-  /* Initialize libcurl */
-  curl_global_init(CURL_GLOBAL_DEFAULT);
+  /* NOTE: curl_global_init() is called once at engine startup for thread-safety */
 
   client->curl = curl_easy_init();
   if (!client->curl) {
@@ -132,6 +134,9 @@ elevenlabs_http_client_t *elevenlabs_http_client_create(apr_pool_t *pool) {
   apr_thread_mutex_create(&client->mutex, APR_THREAD_MUTEX_DEFAULT, pool);
   apr_thread_cond_create(&client->cond, pool);
 
+  apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_DEBUG,
+          "HTTP client created [%p] for multi-session use", (void*)client);
+
   /* Set basic curl options */
   curl_easy_setopt(client->curl, CURLOPT_WRITEFUNCTION, write_callback);
   curl_easy_setopt(client->curl, CURLOPT_WRITEDATA, client);
@@ -150,11 +155,32 @@ elevenlabs_http_client_t *elevenlabs_http_client_create(apr_pool_t *pool) {
  */
 void elevenlabs_http_client_destroy(elevenlabs_http_client_t *client) {
   if (client) {
+    apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_DEBUG,
+            "Destroying HTTP client [%p]", (void*)client);
+    
+    /* Ensure stopped flag is set before attempting thread join */
+    if (client->mutex) {
+      apr_thread_mutex_lock(client->mutex);
+      client->stopped = TRUE;
+      apr_thread_mutex_unlock(client->mutex);
+    }
+    
     if (client->thread) {
       apr_status_t rv = APR_SUCCESS;
+      /* Try to join thread with timeout-like behavior by checking if curl is still running */
+      if (client->curl) {
+        /* Force abort any ongoing curl operation before thread join */
+        curl_easy_setopt(client->curl, CURLOPT_TIMEOUT_MS, 1);
+        curl_easy_pause(client->curl, CURLPAUSE_ALL);
+      }
+      
       apr_thread_join(&rv, client->thread);
       client->thread = NULL;
+      
+      apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_DEBUG,
+              "HTTP client thread joined with status: %d", rv);
     }
+    
     if (client->curl) {
       curl_easy_cleanup(client->curl);
       client->curl = NULL;
@@ -162,6 +188,12 @@ void elevenlabs_http_client_destroy(elevenlabs_http_client_t *client) {
     if (client->headers) {
       curl_slist_free_all(client->headers);
       client->headers = NULL;
+    }
+
+    /* Close any open cache file */
+    if (client->cache_fp) {
+      apr_file_close(client->cache_fp);
+      client->cache_fp = NULL;
     }
 
     if (client->mutex) {
@@ -173,6 +205,9 @@ void elevenlabs_http_client_destroy(elevenlabs_http_client_t *client) {
       apr_thread_cond_destroy(client->cond);
       client->cond = NULL;
     }
+    
+    apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO,
+            "HTTP client fully destroyed");
   }
 }
 
@@ -184,6 +219,18 @@ void elevenlabs_http_client_destroy(elevenlabs_http_client_t *client) {
 static void* APR_THREAD_FUNC elevenlabs_http_thread(apr_thread_t *thd, void *data)
 {
   elevenlabs_http_client_t *client = (elevenlabs_http_client_t*)data;
+  
+  /* Check if already stopped before starting */
+  apr_thread_mutex_lock(client->mutex);
+  apt_bool_t already_stopped = client->stopped;
+  apr_thread_mutex_unlock(client->mutex);
+  
+  if (already_stopped) {
+    apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO,
+            "HTTP thread exiting early - stopped before start");
+    return NULL;
+  }
+  
   CURLcode res = curl_easy_perform(client->curl);
   long http_code = 0;
   curl_easy_getinfo(client->curl, CURLINFO_RESPONSE_CODE, &http_code);
@@ -282,6 +329,9 @@ static void* APR_THREAD_FUNC elevenlabs_http_thread(apr_thread_t *thd, void *dat
   apr_thread_mutex_lock(client->mutex);
   client->stopped = TRUE;
   apr_thread_mutex_unlock(client->mutex);
+  
+  apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_DEBUG,
+          "HTTP thread exiting normally");
   return NULL;
 }
 
@@ -582,29 +632,47 @@ apt_bool_t elevenlabs_http_client_stop(elevenlabs_http_client_t *client) {
     return FALSE;
   }
 
+  apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO,
+          "Stopping ElevenLabs HTTP client...");
+
   apr_thread_mutex_lock(client->mutex);
 
+  /* Set stopped flag FIRST to prevent write_callback from blocking */
   client->stopped = TRUE;
 
   if (client->curl) {
-    /* Cancel the request by setting a very short timeout */
+    /* Force immediate timeout to abort any ongoing transfer */
     curl_easy_setopt(client->curl, CURLOPT_TIMEOUT_MS, 1);
+    curl_easy_setopt(client->curl, CURLOPT_CONNECTTIMEOUT_MS, 1);
 
-    /* Alternative: pause the connection */
+    /* Pause both upload and download to force callback returns */
     curl_easy_pause(client->curl, CURLPAUSE_ALL);
+    
+    apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_DEBUG,
+            "Curl operation aborted, waiting for thread...");
   }
+  
+  /* DO NOT free headers here - thread may still be using them */
+  /* DO NOT join thread here - may cause deadlock if we hold mutex */
+  
+  apr_thread_mutex_unlock(client->mutex);
+
+  /* Join thread OUTSIDE of mutex to avoid deadlock */
+  if (client->thread) {
+    apr_status_t rv = APR_SUCCESS;
+    apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_DEBUG,
+            "Joining HTTP thread...");
+    apr_thread_join(&rv, client->thread);
+    client->thread = NULL;
+    apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_DEBUG,
+            "HTTP thread joined successfully (status=%d)", rv);
+  }
+  
+  /* Now safe to free headers after thread has terminated */
   if (client->headers) {
     curl_slist_free_all(client->headers);
     client->headers = NULL;
   }
-
-  if (client->thread) {
-    apr_status_t rv = APR_SUCCESS;
-    apr_thread_join(&rv, client->thread);
-    client->thread = NULL;
-  }
-
-  apr_thread_mutex_unlock(client->mutex);
 
   apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO,
           "ElevenLabs HTTP client stopped");

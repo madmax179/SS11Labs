@@ -196,6 +196,7 @@ struct elevenlabs_synth_channel_t {
  
  /* HTTP client utilities */
  elevenlabs_http_client_t* elevenlabs_http_client_create(apr_pool_t *pool);
+ void elevenlabs_http_client_destroy(elevenlabs_http_client_t *client);
  apt_bool_t elevenlabs_http_client_stop(elevenlabs_http_client_t *client);
  apt_bool_t elevenlabs_http_client_start_synthesis(elevenlabs_http_client_t *client, 
                                                    const char *text, 

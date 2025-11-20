@@ -12,6 +12,7 @@
 #include "ulaw_decode.h"
 #include "apr_xml.h"
 #include "apr_file_io.h"
+#include "curl/curl.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -453,6 +454,18 @@ apt_bool_t elevenlabs_synth_engine_open(mrcp_engine_t *engine)
 {
     elevenlabs_synth_engine_t *elevenlabs_engine = engine->obj;
     
+    /* Initialize libcurl globally once for all sessions (thread-safe) */
+    CURLcode curl_init_result = curl_global_init(CURL_GLOBAL_DEFAULT);
+    if (curl_init_result != CURLE_OK) {
+        apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_ERROR,
+               "Failed to initialize libcurl globally: %s",
+               curl_easy_strerror(curl_init_result));
+        return mrcp_engine_open_respond(engine, FALSE);
+    }
+    
+    apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO,
+           "libcurl initialized globally for multi-session support");
+    
     if (elevenlabs_engine->task) {
         apt_task_t *task = apt_consumer_task_base_get(elevenlabs_engine->task);
         apt_task_start(task);
@@ -488,8 +501,11 @@ apt_bool_t elevenlabs_synth_engine_close(mrcp_engine_t *engine)
         apt_task_terminate(task, TRUE);
     }
     
-        apt_log(APT_LOG_MARK, APT_PRIO_INFO,
-           "ElevenLabs synthesizer engine closed");
+    /* Cleanup libcurl global resources */
+    curl_global_cleanup();
+    
+    apt_log(APT_LOG_MARK, APT_PRIO_INFO,
+           "ElevenLabs synthesizer engine closed (libcurl cleanup completed)");
     
     return mrcp_engine_close_respond(engine);
 }
@@ -522,6 +538,10 @@ mrcp_engine_channel_t* elevenlabs_synth_engine_channel_create(mrcp_engine_t *eng
     
     /* Create mutex for thread safety */
     apr_thread_mutex_create(&synth_channel->mutex, APR_THREAD_MUTEX_DEFAULT, pool);
+    
+    apt_log(APT_LOG_MARK, APT_PRIO_DEBUG,
+           "Created synth channel [%p] with mutex [%p] for multi-session isolation",
+           (void*)synth_channel, (void*)synth_channel->mutex);
     
     /* Create audio buffer */
     /* Create audio buffer with larger initial capacity */

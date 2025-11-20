@@ -22,6 +22,8 @@ High‑quality streaming speech synthesis via the ElevenLabs API with low latenc
 | Version | File |
 |--------|------|
 | 1.0 | [elevenlabs-synth.so](https://github.com/madmax179/SS11Labs/raw/refs/heads/main/binary/elevenlabs-synth.so) |
+| 1.1 | [elevenlabs-synth.so](https://github.com/madmax179/SS11Labs/releases/download/v1.1/elevenlabs-synth.so) |
+
 
 ## ✅ Requirements
 

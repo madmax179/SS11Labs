@@ -4,6 +4,7 @@
 
 High‑quality streaming speech synthesis via the ElevenLabs API with low latency, on‑disk cache, and flexible configuration.
 
+The [code repo](https://github.com/madmax179/SS11Labs) itself.
 </div>
 
 ## 📌 Features

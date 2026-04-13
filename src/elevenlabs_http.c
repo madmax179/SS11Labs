@@ -17,6 +17,39 @@
 #include "apr_file_io.h"
 
 
+/* Escape a string for safe embedding in a JSON string value.
+   Handles: " \ / and control characters (\n \r \t \b \f). */
+static char* json_escape_string(apr_pool_t *pool, const char *src)
+{
+  if (!src) return apr_pstrdup(pool, "");
+  /* Worst case: every char becomes \uXXXX (6 bytes) */
+  size_t src_len = strlen(src);
+  char *dst = apr_palloc(pool, src_len * 6 + 1);
+  char *out = dst;
+  for (const char *p = src; *p; p++) {
+    unsigned char c = (unsigned char)*p;
+    switch (c) {
+      case '"':  *out++ = '\\'; *out++ = '"';  break;
+      case '\\': *out++ = '\\'; *out++ = '\\'; break;
+      case '\n': *out++ = '\\'; *out++ = 'n';  break;
+      case '\r': *out++ = '\\'; *out++ = 'r';  break;
+      case '\t': *out++ = '\\'; *out++ = 't';  break;
+      case '\b': *out++ = '\\'; *out++ = 'b';  break;
+      case '\f': *out++ = '\\'; *out++ = 'f';  break;
+      default:
+        if (c < 0x20) {
+          /* Control character: \uXXXX */
+          out += sprintf(out, "\\u%04x", c);
+        } else {
+          *out++ = (char)c;
+        }
+        break;
+    }
+  }
+  *out = '\0';
+  return dst;
+}
+
 /* Callback function for libcurl to receive data */
 static size_t write_callback(void *contents, size_t size, size_t nmemb,
                              void *userp) {
@@ -28,6 +61,18 @@ static size_t write_callback(void *contents, size_t size, size_t nmemb,
     apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_DEBUG,
             "Write callback aborted - client stopped");
     return 0; /* Stop receiving data */
+  }
+
+  /* If this is an error response, accumulate body for logging instead of audio processing */
+  if (client->http_error) {
+    size_t space = sizeof(client->error_body) - client->error_body_len - 1;
+    size_t to_copy = total_size < space ? total_size : space;
+    if (to_copy > 0) {
+      memcpy(client->error_body + client->error_body_len, contents, to_copy);
+      client->error_body_len += to_copy;
+      client->error_body[client->error_body_len] = '\0';
+    }
+    return total_size;
   }
 
   if (!client->first_chunk_logged) {
@@ -74,13 +119,26 @@ static size_t write_callback(void *contents, size_t size, size_t nmemb,
 /* Callback function for libcurl to handle headers */
 static size_t header_callback(char *buffer, size_t size, size_t nitems,
                               void *userdata) {
-  (void)userdata; // Mark as unused if not needed
+  elevenlabs_http_client_t *client = (elevenlabs_http_client_t *)userdata;
   size_t total_size = size * nitems;
 
-  /* Log important headers */
+  /* Log status line and detect error responses */
   if (strncmp(buffer, "HTTP/", 5) == 0) {
     apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO,
             "ElevenLabs API response: %.*s", (int)total_size, buffer);
+    /* Parse HTTP status code */
+    int http_status = 0;
+    const char *sp = strchr(buffer, ' ');
+    if (sp) {
+      http_status = atoi(sp + 1);
+    }
+    if (http_status >= 400) {
+      client->http_error = TRUE;
+      client->error_body_len = 0;
+      client->error_body[0] = '\0';
+    } else {
+      client->http_error = FALSE;
+    }
   }
 
   return total_size;
@@ -125,10 +183,14 @@ elevenlabs_http_client_t *elevenlabs_http_client_create(apr_pool_t *pool) {
   client->post_data = NULL;
   client->audio_buffer = NULL;
   client->request_voice_id = NULL;
+  client->request_language_code = NULL;
   client->thread = NULL;
   client->headers = NULL;
   client->first_chunk_logged = FALSE;
   client->start_time = 0;
+  client->http_error = FALSE;
+  client->error_body[0] = '\0';
+  client->error_body_len = 0;
 
   /* Create mutex and condition variable for thread safety */
   apr_thread_mutex_create(&client->mutex, APR_THREAD_MUTEX_DEFAULT, pool);
@@ -247,8 +309,13 @@ static void* APR_THREAD_FUNC elevenlabs_http_thread(apr_thread_t *thd, void *dat
               "ElevenLabs API request failed: %s", curl_easy_strerror(res));
     }
   } else if (http_code != 200) {
-    apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_ERROR,
-            "ElevenLabs API returned HTTP %ld", http_code);
+    if (client->error_body_len > 0) {
+      apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_ERROR,
+              "ElevenLabs API returned HTTP %ld: %s", http_code, client->error_body);
+    } else {
+      apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_ERROR,
+              "ElevenLabs API returned HTTP %ld (no response body)", http_code);
+    }
   } else {
     apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO,
             "ElevenLabs API synthesis completed successfully");
@@ -347,11 +414,70 @@ elevenlabs_http_client_start_synthesis(elevenlabs_http_client_t *client,
 
   /* Reset stopped flag */
   client->stopped = FALSE;
+  /* Reset error state */
+  client->http_error = FALSE;
+  client->error_body[0] = '\0';
+  client->error_body_len = 0;
 
   /* Store config reference */
   const elevenlabs_config_t *config = &channel->elevenlabs_engine->config;
   client->config = config;
 
+  /* Parse voice_id for optional language suffix: "VOICEID_lang" e.g. "NNl6r8mD7vthiJatiJt1_eng"
+     The suffix is separated by the last '_' and must be 2-3 alphabetic characters (ISO 639).
+     If the suffix matches, use the bare voice_id and set request_language_code. */
+  const char *raw_voice_id = client->request_voice_id ? client->request_voice_id : config->voice_id;
+  const char *voice_id = raw_voice_id;
+  client->request_language_code = NULL;
+  if (raw_voice_id) {
+    const char *last_us = strrchr(raw_voice_id, '_');
+    if (last_us) {
+      const char *suffix = last_us + 1;
+      size_t slen = strlen(suffix);
+      if (slen >= 2 && slen <= 3) {
+        /* Verify suffix is all alphabetic */
+        apt_bool_t all_alpha = TRUE;
+        for (size_t i = 0; i < slen; i++) {
+          if (suffix[i] < 'A' || (suffix[i] > 'Z' && suffix[i] < 'a') || suffix[i] > 'z') {
+            all_alpha = FALSE;
+            break;
+          }
+        }
+        if (all_alpha) {
+          /* Split: bare voice_id is everything before last '_' */
+          voice_id = apr_pstrndup(client->pool, raw_voice_id, (apr_size_t)(last_us - raw_voice_id));
+          client->request_language_code = apr_pstrdup(client->pool, suffix);
+          apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO,
+                  "Parsed voice_id='%s', language_code='%s' from '%s'",
+                  voice_id, client->request_language_code, raw_voice_id);
+        }
+      }
+    }
+  }
+
+  /* Strip [audio tags] from text for models that do not support them (all except eleven_v3).
+     eleven_v3 natively supports audio event tags like [laughs], [sighs], etc. */
+  const char *processed_text = text;
+  if (config->model_id && strcasecmp(config->model_id, "eleven_v3") != 0) {
+    char *stripped = apr_palloc(client->pool, strlen(text) + 1);
+    char *dst = stripped;
+    const char *src = text;
+    while (*src) {
+      if (*src == '[') {
+        /* Skip until closing ']' or end of string */
+        while (*src && *src != ']') src++;
+        if (*src == ']') src++;
+      } else {
+        *dst++ = *src++;
+      }
+    }
+    *dst = '\0';
+    processed_text = stripped;
+    if (strcmp(processed_text, text) != 0) {
+      apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_DEBUG,
+              "Stripped audio tags from text before synthesis");
+    }
+  }
   /* Build deterministic cache key and paths when caching enabled */
   client->cache_playback_mode = FALSE;
   client->cache_fp = NULL;
@@ -360,10 +486,9 @@ elevenlabs_http_client_start_synthesis(elevenlabs_http_client_t *client,
   client->cache_path_final = NULL;
   client->cache_key = NULL;
 
-  const char *voice_id = client->request_voice_id ? client->request_voice_id : config->voice_id;
   if (config->cache_enabled && config->cache_dir) {
     char *key_hex = NULL;
-    if (elevenlabs_cache_compute_key(client->pool, voice_id, config->model_id, config->output_format, text, &key_hex)) {
+    if (elevenlabs_cache_compute_key(client->pool, voice_id, config->model_id, config->output_format, processed_text, &key_hex)) {
       client->cache_key = key_hex;
       const char *ext = NULL;
       /* Store as WAV when pcm_*, otherwise use mp3 extension if output_format starts with mp3 */
@@ -416,18 +541,25 @@ elevenlabs_http_client_start_synthesis(elevenlabs_http_client_t *client,
   }
 
   /* Build URL */
-  /* Use the streaming endpoint for lower latency */
-  /* Use the streaming endpoint for lower latency */
+  /* Note: optimize_streaming_latency is deprecated and omitted — it causes HTTP 400
+     on newer models (e.g. eleven_v3) and was optional for all others. */
   client->url = apr_psprintf(client->pool,
-                             "%s/%s/stream?output_format=%s&optimize_streaming_latency=%d",
+                             "%s/%s/stream?output_format=%s",
                              config->base_url, voice_id,
-                             config->output_format,
-                             config->optimize_streaming_latency);
+                             config->output_format);
 
-  /* Build POST data */
-  client->post_data =
-      apr_psprintf(client->pool, "{\"text\":\"%s\",\"model_id\":\"%s\"}", text,
-                   config->model_id);
+  /* Build POST data: text + model_id + optional language_code.
+     Escape text to prevent JSON injection from quotes/backslashes in input. */
+  const char *escaped_text = json_escape_string(client->pool, processed_text);
+  if (client->request_language_code) {
+    client->post_data = apr_psprintf(client->pool,
+        "{\"text\":\"%s\",\"model_id\":\"%s\",\"language_code\":\"%s\"}",
+        escaped_text, config->model_id, client->request_language_code);
+  } else {
+    client->post_data = apr_psprintf(client->pool,
+        "{\"text\":\"%s\",\"model_id\":\"%s\"}",
+        escaped_text, config->model_id);
+  }
 
   apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO,
           "Starting synthesis with URL: %s", client->url);

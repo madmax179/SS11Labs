@@ -64,7 +64,6 @@ static void elevenlabs_config_set_defaults(elevenlabs_config_t *config)
     config->connect_timeout_ms = DEFAULT_CONNECT_TIMEOUT_MS;
     config->read_timeout_ms = DEFAULT_READ_TIMEOUT_MS;
     config->fallback_ulaw_to_pcm = DEFAULT_FALLBACK_ULAW_TO_PCM;
-    config->optimize_streaming_latency = DEFAULT_OPTIMIZE_STREAMING_LATENCY;
     /* Caching defaults */
     config->cache_enabled = DEFAULT_CACHE_ENABLED;
     config->cache_dir = (char*)DEFAULT_CACHE_DIR;
@@ -204,9 +203,6 @@ static apt_bool_t elevenlabs_config_parse(elevenlabs_config_t *config, apr_pool_
                                 else if (strcmp(name, "fallback_ulaw_to_pcm") == 0) {
                                     config->fallback_ulaw_to_pcm = (strcmp(value, "true") == 0);
                                 }
-                                else if (strcmp(name, "optimize_streaming_latency") == 0) {
-                                    config->optimize_streaming_latency = atoi(value);
-                                }
                                 else if (strcmp(name, "cache_enabled") == 0 || strcmp(name, "cache-enabled") == 0) {
                                     config->cache_enabled = (strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
                                 }
@@ -233,8 +229,8 @@ static apt_bool_t elevenlabs_config_parse(elevenlabs_config_t *config, apr_pool_
     }
 
     apt_log(ELEVENLABS_SYNTH_LOG_MARK, APT_PRIO_INFO, 
-           "Configuration loaded: voice_id=%s, model_id=%s, output_format=%s, chunk_ms=%u, osl=%d, base_url=%s, cache_enabled=%d, cache_dir=%s",
-           config->voice_id, config->model_id, config->output_format, config->chunk_ms, config->optimize_streaming_latency, config->base_url, config->cache_enabled, config->cache_dir);
+           "Configuration loaded: voice_id=%s, model_id=%s, output_format=%s, chunk_ms=%u, base_url=%s, cache_enabled=%d, cache_dir=%s",
+           config->voice_id, config->model_id, config->output_format, config->chunk_ms, config->base_url, config->cache_enabled, config->cache_dir);
 
     return TRUE;
 }

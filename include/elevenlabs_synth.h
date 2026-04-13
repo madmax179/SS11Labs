@@ -49,7 +49,6 @@
  #define DEFAULT_CONNECT_TIMEOUT_MS 5000
  #define DEFAULT_READ_TIMEOUT_MS 15000
  #define DEFAULT_FALLBACK_ULAW_TO_PCM TRUE
- #define DEFAULT_OPTIMIZE_STREAMING_LATENCY 0
  #define DEFAULT_CACHE_ENABLED FALSE
  #define DEFAULT_CACHE_DIR "./data/11labs"
  
@@ -84,8 +83,8 @@
      uint32_t connect_timeout_ms;
      uint32_t read_timeout_ms;
      apt_bool_t fallback_ulaw_to_pcm;
-    int optimize_streaming_latency; /* 0..4 as per ElevenLabs docs */
     /* Caching */
+    /* Note: optimize_streaming_latency removed — deprecated by ElevenLabs, causes HTTP 400 on newer models */
     apt_bool_t cache_enabled;        /* Enable/disable local audio caching */
     char *cache_dir;                 /* Cache directory path */
  } elevenlabs_config_t;
@@ -110,7 +109,12 @@
      apr_thread_cond_t *cond;
      apr_pool_t *pool;
      const elevenlabs_config_t *config;
-     const char *request_voice_id;  /* Voice ID for current request, overrides config */
+     const char *request_voice_id;      /* Voice ID for current request (pure ID, no lang suffix) */
+    const char *request_language_code;  /* Language code parsed from voice_id suffix, e.g. "en" */
+    /* Error response buffering */
+    apt_bool_t http_error;          /* TRUE if last response was HTTP >= 400 */
+    char error_body[4096];          /* Accumulated error response body */
+    size_t error_body_len;          /* Current length of error_body */
     apr_thread_t *thread;           /* Background HTTP thread */
     struct curl_slist *headers;     /* HTTP headers for current request */
     apr_time_t start_time;          /* For measuring time-to-first-byte */

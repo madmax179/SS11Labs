@@ -8,6 +8,20 @@ The [code-repo](https://github.com/madmax179/SS11Labs)
 
 </div>
 
+## 🆕 Changelog
+
+### v1.2 (2026-04-13)
+**Fixes:**
+- Fixed HTTP 400 with `eleven_v3` model — removed deprecated `optimize_streaming_latency` query parameter (rejected by newer models, was optional for all others)
+- Fixed JSON injection: text is now properly escaped (`"`, `\`, control characters) before embedding in the request body
+
+**New:**
+- **Language code:** pass `VOICEID_lang` as `Voice-Name` (e.g. `NNl6r8mD7vthiJatiJt1_en`) — plugin splits voice ID and sends `language_code` to the API
+- **Audio tag stripping:** `[laughs]`, `[sighs]` and similar tags are silently removed for all models except `eleven_v3` (which natively supports them)
+- **Error response logging:** on HTTP 4xx/5xx the full API response body is now logged for easier debugging
+
+---
+
 ## 📌 Features
 - Streaming synthesis (HTTP/2) with fast TTFB (Time To First Byte) and IN-PROGRESS keep-alive
 - On-disk cache: repeated requests (voice+model+format+text) — instant, no API call
@@ -25,6 +39,7 @@ The [code-repo](https://github.com/madmax179/SS11Labs)
 |--------|------|
 | 1.0 | [elevenlabs-synth.so](https://github.com/madmax179/SS11Labs/raw/refs/heads/main/binary/elevenlabs-synth.so) |
 | 1.1 | [elevenlabs-synth.so](https://github.com/madmax179/SS11Labs/releases/download/v1.1/elevenlabs-synth.so) |
+| 1.2 | [elevenlabs-synth.so](https://github.com/madmax179/SS11Labs/releases/download/v1.2/elevenlabs-synth.so) |
 
 
 ## ✅ Requirements
